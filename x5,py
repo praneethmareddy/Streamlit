@@ -1,0 +1,539 @@
+import streamlit as st
+import requests
+import pickle
+import os
+from datetime import datetime
+from uuid import uuid4
+
+DATA_FILE = "conversations.pkl"
+
+# Configure page
+st.set_page_config(
+    page_title="Gen AI Config Generator",
+    page_icon="⚙️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items=None  # This removes the "Deploy" button
+)
+
+# Modern CSS styling with DeepSeek-inspired design
+st.markdown("""
+    <style>
+        /* Main container */
+        .main {
+            background-color: #0f172a;
+        }
+        
+        /* Remove the "Deploy" button */
+        .stDeployButton {
+            display: none !important;
+        }
+        
+        /* Sidebar */
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+            border-right: 1px solid #334155;
+        }
+        
+        /* Chat bubbles - smaller and more compact */
+        .user-bubble {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 12px 12px 4px 12px;
+            margin: 6px 0;
+            max-width: 80%;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            align-self: flex-end;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        .assistant-bubble {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 8px 12px;
+            border-radius: 12px 12px 12px 4px;
+            margin: 6px 0;
+            max-width: 80%;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            align-self: flex-start;
+            border: 1px solid #334155;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        /* Chat container */
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            padding: 8px;
+            height: calc(100vh - 260px);
+            overflow-y: auto;
+            scrollbar-width: thin;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            background-color: #0f172a;
+            margin-bottom: 12px;
+        }
+        
+        /* Input area - properly aligned */
+        .input-container {
+            border: 1px solid #334155;
+            border-radius: 8px;
+            background-color: #0f172a;
+            padding: 0;
+        }
+        
+        [data-testid="stChatInput"] {
+            background-color: #0f172a !important;
+            border-top: none !important;
+            padding: 0 !important;
+        }
+        
+        [data-testid="stChatInput"] textarea {
+            min-height: 100px !important;
+            font-size: 14px !important;
+            padding: 12px !important;
+            border: none !important;
+            background-color: #0f172a !important;
+            color: white !important;
+        }
+        
+        [data-testid="stChatInput"] button {
+            margin-top: 8px !important;
+            background-color: #3b82f6 !important;
+        }
+        
+        /* Buttons */
+        .stButton button {
+            transition: all 0.2s ease;
+            border-radius: 8px !important;
+            font-size: 14px !important;
+        }
+        
+        .stButton button:hover {
+            transform: scale(1.05);
+        }
+        
+        /* Conversation list items */
+        .conversation-item {
+            padding: 8px 12px;
+            margin: 4px 0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 14px;
+        }
+        
+        .conversation-item:hover {
+            background-color: #334155;
+        }
+        
+        .active-conversation {
+            background-color: #334155;
+            border-left: 3px solid #3b82f6;
+        }
+        
+        /* Icons - DeepSeek inspired */
+        .icon-btn {
+            background: transparent !important;
+            border: none !important;
+            color: #94a3b8 !important;
+            padding: 2px !important;
+            min-width: 24px !important;
+            height: 24px !important;
+            font-size: 12px !important;
+        }
+        
+        .icon-btn:hover {
+            color: #3b82f6 !important;
+        }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #3b82f6;
+            border-radius: 2px;
+        }
+        
+        /* Timestamps */
+        .timestamp {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            margin-top: 2px;
+        }
+        
+        /* Sample queries */
+        .sample-queries {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 16px;
+        }
+        
+        .query-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .query-card:hover {
+            background: #334155;
+            transform: translateY(-2px);
+        }
+        
+        .query-card h4 {
+            margin: 0 0 4px 0;
+            color: #e2e8f0;
+            font-size: 13px;
+        }
+        
+        .query-card p {
+            margin: 0;
+            color: #94a3b8;
+            font-size: 12px;
+        }
+        
+        /* Title outside chat container */
+        .app-title {
+            margin-bottom: 16px;
+            color: #e2e8f0;
+        }
+        
+        /* Message container */
+        .message-container {
+            margin-top: 8px;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# Load or initialize data
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "rb") as f:
+        conversations = pickle.load(f)
+else:
+    conversations = {}
+
+if "active_chat_id" not in st.session_state:
+    st.session_state.active_chat_id = list(conversations.keys())[0] if conversations else None
+if "edit_index" not in st.session_state:
+    st.session_state.edit_index = None
+
+# Functions
+def save_conversations():
+    with open(DATA_FILE, "wb") as f:
+        pickle.dump(conversations, f)
+
+def create_new_chat(name=None):
+    chat_id = str(uuid4())
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    chat_name = name if name else f"Config Chat - {timestamp}"
+    conversations[chat_id] = {
+        "name": chat_name, 
+        "messages": [],
+        "created_at": timestamp,
+        "updated_at": timestamp
+    }
+    st.session_state.active_chat_id = chat_id
+    save_conversations()
+    return chat_id
+
+def format_timestamp(timestamp):
+    if isinstance(timestamp, str):
+        return timestamp
+    return timestamp.strftime("%Y-%m-%d %H:%M")
+
+# Sidebar - Conversation List
+with st.sidebar:
+    st.markdown("""
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+            <h1 style="margin: 0; font-size: 20px; color: #3b82f6;">Gen AI Config</h1>
+            <span style="font-size: 20px;">⚙️</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # New chat button with icon
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        new_chat_name = st.text_input("New chat name", "", placeholder="Name your config", label_visibility="collapsed")
+    with col2:
+        if st.button("➕ New", use_container_width=True, type="primary"):
+            if new_chat_name.strip():
+                create_new_chat(new_chat_name)
+            else:
+                create_new_chat()
+            st.rerun()
+    
+    st.markdown("---")
+    st.subheader("Configurations", anchor=False)
+    
+    # Conversation list with icons and timestamps
+    to_delete = None
+    for cid, chat in conversations.items():
+        is_active = cid == st.session_state.active_chat_id
+        
+        col1, col2, col3 = st.columns([1, 12, 2])
+        with col1:
+            st.markdown(f"📝", help=format_timestamp(chat.get("created_at", "")))
+        with col2:
+            if st.button(
+                f"{chat['name']}",
+                key=f"chat_{cid}",
+                help=format_timestamp(chat.get("updated_at", "")),
+                use_container_width=True
+            ):
+                st.session_state.active_chat_id = cid
+                st.session_state.edit_index = None
+                st.rerun()
+        with col3:
+            if st.button("🗑️", key=f"del_{cid}", help="Delete", use_container_width=True, type="secondary"):
+                to_delete = cid
+    
+    if to_delete:
+        del conversations[to_delete]
+        if st.session_state.active_chat_id == to_delete:
+            st.session_state.active_chat_id = list(conversations.keys())[0] if conversations else None
+        save_conversations()
+        st.rerun()
+
+# Main Chat Area - Title outside container
+st.markdown('<div class="app-title"><h2>⚙️ Gen AI Configuration Generator</h2></div>', unsafe_allow_html=True)
+
+chat_id = st.session_state.active_chat_id
+if not chat_id:
+    st.markdown("""
+        <div style="text-align: center; margin-top: 40px;">
+            <h3>⚙️ Welcome to Gen AI Config Generator</h3>
+            <p>Start a new configuration to begin</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+        <div class="sample-queries">
+            <div class="query-card" onclick="window.streamlitScriptHost.parent.postMessage({'type': 'sampleQuery', 'query': 'Generate a transformer model config with 12 layers, 768 hidden size, and 12 attention heads'}, '*')">
+                <h4>🧠 Transformer Config</h4>
+                <p>Generate a transformer model configuration</p>
+            </div>
+            <div class="query-card" onclick="window.streamlitScriptHost.parent.postMessage({'type': 'sampleQuery', 'query': 'Create a training config for fine-tuning with batch size 32, learning rate 3e-5, and Adam optimizer'}, '*')">
+                <h4>🏋️ Training Setup</h4>
+                <p>Create training configuration</p>
+            </div>
+            <div class="query-card" onclick="window.streamlitScriptHost.parent.postMessage({'type': 'sampleQuery', 'query': 'Show me a YAML config for a vision transformer with patch size 16x16'}, '*')">
+                <h4>👁️ Vision Model</h4>
+                <p>Generate ViT configuration</p>
+            </div>
+            <div class="query-card" onclick="window.streamlitScriptHost.parent.postMessage({'type': 'sampleQuery', 'query': 'Create a distributed training config for 4 GPUs with mixed precision'}, '*')">
+                <h4>⏱️ Distributed Training</h4>
+                <p>Multi-GPU configuration</p>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    st.stop()
+
+messages = conversations[chat_id]["messages"]
+
+# Chat messages display
+with st.container():
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    
+    # Show sample queries if no messages exist
+    if not messages:
+        st.markdown("""
+            <div style="text-align: center; margin: 20px 0;">
+                <h4>⚡ Quick Start Configurations</h4>
+                <div class="sample-queries">
+                    <div class="query-card" onclick="window.streamlitScriptHost.parent.postMessage({'type': 'sampleQuery', 'query': 'Generate a base LLM config with 6B parameters'}, '*')">
+                        <h4>📜 Base Model</h4>
+                        <p>6B parameter configuration</p>
+                    </div>
+                    <div class="query-card" onclick="window.streamlitScriptHost.parent.postMessage({'type': 'sampleQuery', 'query': 'Create a config for text classification with BERT'}, '*')">
+                        <h4>🏷️ Text Classification</h4>
+                        <p>BERT fine-tuning setup</p>
+                    </div>
+                    <div class="query-card" onclick="window.streamlitScriptHost.parent.postMessage({'type': 'sampleQuery', 'query': 'Generate a config for RLHF training'}, '*')">
+                        <h4>🎚️ RLHF Setup</h4>
+                        <p>Reinforcement learning config</p>
+                    </div>
+                    <div class="query-card" onclick="window.streamlitScriptHost.parent.postMessage({'type': 'sampleQuery', 'query': 'Show me a quantization config for 4-bit inference'}, '*')">
+                        <h4>🧮 Quantization</h4>
+                        <p>4-bit inference setup</p>
+                    </div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    for i, msg in enumerate(messages):
+        role = msg["role"]
+        content = msg["content"]
+        timestamp = msg.get("timestamp", datetime.now().strftime("%H:%M"))
+        
+        st.markdown('<div class="message-container">', unsafe_allow_html=True)
+        if role == "user":
+            if st.session_state.edit_index == i:
+                # Edit mode for user message
+                edited_content = st.text_area(
+                    "Edit your message:",
+                    value=content,
+                    key=f"edit_{i}",
+                    label_visibility="collapsed",
+                    height=80
+                )
+                
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("✅ Save", key=f"save_{i}", use_container_width=True):
+                        messages[i]["content"] = edited_content
+                        if i == 0:
+                            conversations[chat_id]["name"] = edited_content[:30] + ("..." if len(edited_content) > 30 else "")
+                        
+                        # Remove assistant response if exists
+                        if i + 1 < len(messages) and messages[i + 1]["role"] == "assistant":
+                            del messages[i + 1]
+                        
+                        st.session_state.edit_index = None
+                        save_conversations()
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Cancel", key=f"cancel_{i}", use_container_width=True):
+                        st.session_state.edit_index = None
+                        st.rerun()
+            else:
+                # Display user message
+                st.markdown(
+                    f"""
+                    <div style="display: flex; justify-content: flex-end; align-items: center; gap: 4px;">
+                        <button class="icon-btn" onclick="window.streamlitScriptHost.parent.postMessage({{'type': 'editMsg', 'index': {i}}}, '*')">
+                            ✏️
+                        </button>
+                        <div class="user-bubble">
+                            {content}
+                            <div class="timestamp">{timestamp}</div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+        else:
+            # Display assistant message
+            st.markdown(
+                f"""
+                <div style="display: flex; align-items: flex-start; gap: 4px;">
+                    <div style="font-size: 20px; margin-top: 4px;">⚙️</div>
+                    <div class="assistant-bubble">
+                        {content}
+                        <div class="timestamp">{timestamp}</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# Input container - properly aligned with main background
+st.markdown('<div class="input-container">', unsafe_allow_html=True)
+prompt = st.chat_input("Describe your AI configuration needs...", key="chat_input")
+st.markdown('</div>', unsafe_allow_html=True)
+
+# Handle edit messages and sample queries from JavaScript
+if st.session_state.get("edit_msg_index") is not None:
+    st.session_state.edit_index = st.session_state.edit_msg_index
+    del st.session_state.edit_msg_index
+    st.rerun()
+
+if st.session_state.get("sample_query") is not None:
+    prompt = st.session_state.sample_query
+    del st.session_state.sample_query
+    
+    # Set the query in the input box
+    st.session_state.chat_input = prompt
+    
+    # Focus the input box
+    st.markdown("""
+        <script>
+            setTimeout(() => {
+                const input = document.querySelector('[data-testid="stChatInput"] textarea');
+                if (input) {
+                    input.focus();
+                    // Set cursor at end of text
+                    input.selectionStart = input.selectionEnd = input.value.length;
+                }
+            }, 100);
+        </script>
+    """, unsafe_allow_html=True)
+    
+    st.rerun()
+
+if prompt:
+    timestamp = datetime.now().strftime("%H:%M")
+    messages.append({
+        "role": "user", 
+        "content": prompt,
+        "timestamp": timestamp
+    })
+    
+    # Update chat name if it's the first message
+    if len(messages) == 1:
+        conversations[chat_id]["name"] = prompt[:30] + "..." if len(prompt) > 30 else prompt
+    
+    # Get assistant response
+    try:
+        res = requests.post("http://localhost:5000/query", json={"query": prompt})
+        answer = res.json()
+    except Exception as e:
+        answer = f"Error: {str(e)}"
+    
+    messages.append({
+        "role": "assistant", 
+        "content": answer,
+        "timestamp": datetime.now().strftime("%H:%M")
+    })
+    
+    # Update conversation metadata
+    conversations[chat_id]["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    save_conversations()
+    st.rerun()
+
+# JavaScript for message editing and sample queries
+st.markdown("""
+    <script>
+        // Remove the "Deploy" button if it still exists
+        setTimeout(() => {
+            const deployButton = document.querySelector('.stDeployButton');
+            if (deployButton) deployButton.style.display = 'none';
+        }, 100);
+        
+        window.addEventListener('message', function(event) {
+            if (event.data.type === 'editMsg') {
+                Streamlit.setComponentValue({edit_msg_index: event.data.index});
+            }
+            if (event.data.type === 'sampleQuery') {
+                Streamlit.setComponentValue({sample_query: event.data.query});
+            }
+        });
+        
+        // Focus the input box when clicking sample queries
+        document.querySelectorAll('.query-card').forEach(card => {
+            card.addEventListener('click', function() {
+                setTimeout(() => {
+                    const input = document.querySelector('[data-testid="stChatInput"] textarea');
+                    if (input) input.focus();
+                }, 100);
+            });
+        });
+    </script>
+""", unsafe_allow_html=True)
