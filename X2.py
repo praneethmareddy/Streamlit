@@ -1,144 +1,106 @@
-import streamlit as st
-import requests
-import pickle
-import os
-import json
-from uuid import uuid4
+import streamlit as st import requests import pickle import os from datetime import datetime from uuid import uuid4
 
-HISTORY_FILE = "chat_history.pkl"
-SAMPLE_QUERIES = [
-    "What is the capital of France?",
-    "Explain the theory of relativity in simple terms.",
-    "How can I improve my productivity?",
-    "Tell me a fun programming fact.",
-    "What’s the weather like in Tokyo today?"
-]
+DATA_FILE = "conversations.pkl"
 
-st.set_page_config(page_title="Chatbot", page_icon="💬", layout="wide")
+---------- Persistent Storage ----------
 
-# Inject gradient CSS
-st.markdown("""
-<style>
-body {
-    font-family: 'Segoe UI', sans-serif;
-}
-.chat-container {
-    margin: 20px 0;
-}
-.user-msg, .ai-msg {
-    padding: 10px 14px;
-    border-radius: 12px;
-    margin-bottom: 10px;
-    max-width: 80%;
-}
-.user-msg {
-    background: linear-gradient(135deg, #3e8ed0, #6eaddf);
-    color: white;
-    align-self: flex-end;
-}
-.ai-msg {
-    background: linear-gradient(135deg, #2c5364, #203a43);
-    color: white;
-    align-self: flex-start;
-}
-.edit-button {
-    font-size: 12px;
-    margin-left: 10px;
-}
-</style>
-""", unsafe_allow_html=True)
+if os.path.exists(DATA_FILE): with open(DATA_FILE, "rb") as f: conversations = pickle.load(f) else: conversations = {}
 
-# Load or initialize chat history
-if os.path.exists(HISTORY_FILE):
-    with open(HISTORY_FILE, "rb") as f:
-        chat_history = pickle.load(f)
-else:
-    chat_history = []
+---------- Session State ----------
 
-# Sidebar
-with st.sidebar:
-    st.title("💬 AI Chatbot")
-    theme = st.radio("Theme", ["Dark", "Light"], horizontal=True)
-    if theme == "Light":
-        st.markdown("<style>body { background: #f7f7f7 !important; color: black !important; }</style>", unsafe_allow_html=True)
+if "active_chat_id" not in st.session_state: st.session_state.active_chat_id = list(conversations.keys())[0] if conversations else None if "edit_index" not in st.session_state: st.session_state.edit_index = None if "edit_text" not in st.session_state: st.session_state.edit_text = ""
 
-    if st.button("➕ New Chat"):
-        chat_history = []
-        with open(HISTORY_FILE, "wb") as f:
-            pickle.dump(chat_history, f)
-        st.experimental_rerun()
+---------- Helpers ----------
 
-    if st.button("📤 Export Chat"):
-        st.download_button(
-            label="Download as JSON",
-            data=json.dumps(chat_history, indent=2),
-            file_name="chat_history.json",
-            mime="application/json"
-        )
+def save_conversations(): with open(DATA_FILE, "wb") as f: pickle.dump(conversations, f)
 
-    st.markdown("---")
-    st.subheader("Sample Queries")
-    for q in SAMPLE_QUERIES:
-        if st.button(q):
-            st.session_state["prompt"] = q
-            st.experimental_rerun()
+def create_new_chat(name=None): cid = str(uuid4()) title = name if name else f"Chat @ {datetime.now().strftime('%Y-%m-%d %H:%M')}" conversations[cid] = {"name": title, "messages": []} st.session_state.active_chat_id = cid save_conversations()
 
-# Show conversation
-st.title("🌟 Chat with Your AI Assistant")
+---------- Sidebar ----------
 
-delete_index = None
-edit_index = None
-edited_text = ""
+with st.sidebar: st.title("💬 Local Chatbot")
 
-for idx, msg in enumerate(chat_history):
-    col1, col2 = st.columns([9, 1])
-    with col1:
-        if msg["role"] == "user":
-            st.markdown(f'<div class="user-msg">🧑‍💻 {msg["content"]}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="ai-msg">🤖 {msg["content"]}</div>', unsafe_allow_html=True)
-
-    with col2:
-        if msg["role"] == "user":
-            if st.button("✏️", key=f"edit_{idx}"):
-                edit_index = idx
-                edited_text = msg["content"]
-        if st.button("🗑️", key=f"delete_{idx}"):
-            delete_index = idx
-
-# Handle edit
-if edit_index is not None:
-    new_text = st.text_input("Edit your question:", value=edited_text)
-    if st.button("Submit Edit"):
-        chat_history[edit_index]["content"] = new_text
-        chat_history = chat_history[:edit_index+1]  # delete following responses
-        with open(HISTORY_FILE, "wb") as f:
-            pickle.dump(chat_history, f)
-        st.success("Edited! Please re-submit to regenerate response.")
-        st.experimental_rerun()
-
-# Handle delete
-if delete_index is not None:
-    del chat_history[delete_index]
-    with open(HISTORY_FILE, "wb") as f:
-        pickle.dump(chat_history, f)
+new_chat_name = st.text_input("New Chat Name")
+if st.button("➕ New Chat"):
+    create_new_chat(new_chat_name if new_chat_name else None)
     st.experimental_rerun()
 
-# User input
-prompt = st.chat_input("Ask something...") or st.session_state.pop("prompt", "")
+st.markdown("---")
+st.subheader("Conversations")
+to_delete = None
+for cid, chat in conversations.items():
+    col1, col2 = st.columns([0.8, 0.2])
+    with col1:
+        if st.button(chat['name'], key=f"select_{cid}"):
+            st.session_state.active_chat_id = cid
+            st.experimental_rerun()
+    with col2:
+        if st.button("🗑️", key=f"del_{cid}"):
+            to_delete = cid
 
-if prompt:
-    st.markdown(f'<div class="user-msg">🧑‍💻 {prompt}</div>', unsafe_allow_html=True)
-    chat_history.append({"role": "user", "content": prompt})
+if to_delete:
+    del conversations[to_delete]
+    if st.session_state.active_chat_id == to_delete:
+        st.session_state.active_chat_id = list(conversations.keys())[0] if conversations else None
+    save_conversations()
+    st.experimental_rerun()
 
-    try:
-        res = requests.post("http://localhost:5002/query", json={"query": prompt})
-        response = res.json().get("response", "No response from server.")
-    except Exception as e:
-        response = f"Error: {e}"
+---------- Main UI ----------
 
-    st.markdown(f'<div class="ai-msg">🤖 {response}</div>', unsafe_allow_html=True)
-    chat_history.append({"role": "assistant", "content": response})
+st.markdown(""" <style> .message-container {margin-bottom: 1rem; padding: 0.75rem 1rem; border-radius: 12px; background: linear-gradient(145deg, #e0e0e0, #ffffff);} .assistant {background: linear-gradient(145deg, #d1f0ff, #f0f9ff);} .user {background: linear-gradient(145deg, #fce4ec, #f8bbd0);} .icon {font-size: 1.4rem; margin-right: 0.5rem;} </style> """, unsafe_allow_html=True)
 
-    with open(HISTORY_FILE, "wb") as f:
-        pickle.dump(chat_history, f)
+if not st.session_state.active_chat_id: st.info("Start a new chat to begin.") st.stop()
+
+chat = conversations[st.session_state.active_chat_id]
+
+---------- Display Chat Messages ----------
+
+for idx, msg in enumerate(chat["messages"]): col1, col2 = st.columns([0.9, 0.1]) with col1: st.markdown(f"<div class='message-container {msg['role']}'>", unsafe_allow_html=True) icon = "🧑" if msg['role'] == "user" else "🤖" st.markdown(f"<span class='icon'>{icon}</span>", unsafe_allow_html=True)
+
+if st.session_state.edit_index == idx:
+        new_text = st.text_area("Edit your message:", value=st.session_state.edit_text, key=f"edit_input_{idx}")
+        if st.button("Resend", key=f"resend_{idx}"):
+            chat['messages'][idx]['content'] = new_text
+            # Delete the assistant's old response
+            if idx+1 < len(chat['messages']) and chat['messages'][idx+1]['role'] == 'assistant':
+                del chat['messages'][idx+1]
+            try:
+                res = requests.post("http://localhost:5002/query", json={"query": new_text})
+                answer = res.json().get("response", "No response from server.")
+            except Exception as e:
+                answer = f"Error: {e}"
+            chat['messages'].insert(idx+1, {"role": "assistant", "content": answer})
+            st.session_state.edit_index = None
+            save_conversations()
+            st.experimental_rerun()
+    else:
+        st.markdown(msg["content"], unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with col2:
+    if msg['role'] == 'user':
+        if st.button("✏️", key=f"edit_{idx}"):
+            st.session_state.edit_index = idx
+            st.session_state.edit_text = msg['content']
+            st.experimental_rerun()
+    if st.button("❌", key=f"delete_{idx}"):
+        del chat['messages'][idx]
+        save_conversations()
+        st.experimental_rerun()
+
+---------- Chat Input ----------
+
+prompt = st.chat_input("Ask something...") if prompt: chat['messages'].append({"role": "user", "content": prompt}) with st.chat_message("user", avatar="🧑"): st.markdown(prompt)
+
+try:
+    res = requests.post("http://localhost:5002/query", json={"query": prompt})
+    answer = res.json().get("response", "No response from server.")
+except Exception as e:
+    answer = f"Error: {e}"
+
+chat['messages'].append({"role": "assistant", "content": answer})
+with st.chat_message("assistant", avatar="🤖"):
+    st.markdown(answer)
+
+save_conversations()
+
