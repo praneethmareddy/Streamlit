@@ -9,12 +9,12 @@ DATA_FILE = "conversations.pkl"
 
 st.set_page_config(page_title="Gradient Chatbot", page_icon="🌟", layout="wide")
 
-# Gradient UI and dark mode styling
+# Force dark mode via custom CSS
 st.markdown("""
     <style>
-        body {
-            background-color: #1e1e1e;
-            color: white;
+        html, body, [class*="css"] {
+            background-color: #121212 !important;
+            color: #e0e0e0 !important;
         }
         .stChatMessage { margin-bottom: 1rem; }
         .user-bubble {
@@ -34,13 +34,15 @@ st.markdown("""
             max-width: 85%;
         }
         .icon-btn {
-            font-size: 0.85rem;
-            padding: 2px 6px;
-            margin-left: 4px;
-            background: #444;
-            color: white;
-            border-radius: 6px;
-            cursor: pointer;
+            font-size: 0.8rem;
+            padding: 0.2rem;
+        }
+        .sample-query {
+            background: #2c2c2c;
+            padding: 0.6rem 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 0.5rem;
+            display: inline-block;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -57,7 +59,7 @@ if "active_chat_id" not in st.session_state:
 if "edit_index" not in st.session_state:
     st.session_state.edit_index = None
 
-# Create new chat
+# Create a new chat
 def create_new_chat(name=None):
     chat_id = str(uuid4())
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -82,14 +84,21 @@ with st.sidebar:
     st.subheader("Conversations")
     to_delete = None
     for cid, chat in conversations.items():
-        col1, col2 = st.columns([10, 1])
-        with col1:
+        cols = st.columns([8, 1, 1])
+        with cols[0]:
             if st.button(f"📂 {chat['name']}", key=f"chat_{cid}"):
                 st.session_state.active_chat_id = cid
                 st.session_state.edit_index = None
                 st.rerun()
-        with col2:
-            if st.button("❌", key=f"del_{cid}"):
+        with cols[1]:
+            if st.button("🖉", key=f"edit_chat_{cid}", help="Rename"):
+                new_name = st.text_input("Rename Chat", value=chat["name"], key=f"name_{cid}")
+                if new_name:
+                    chat["name"] = new_name
+                    save_conversations()
+                    st.rerun()
+        with cols[2]:
+            if st.button("🗑️", key=f"del_{cid}", help="Delete"):
                 to_delete = cid
     if to_delete:
         del conversations[to_delete]
@@ -97,39 +106,52 @@ with st.sidebar:
         save_conversations()
         st.rerun()
 
-# Main chat display
+# Main Chat UI
 st.title("Talk to Your Assistant")
 chat_id = st.session_state.active_chat_id
 
 if not chat_id:
-    st.info("No conversations found. Try one of these sample queries:")
-    st.markdown("""
-    - What is the capital of France?
-    - Tell me a joke.
-    - How does a black hole work?
-    - Summarize the history of AI.
-    """)
+    st.info("No conversations yet. Try a sample query below!")
+    sample_queries = [
+        "What is Streamlit?",
+        "Give me a summary of today's news.",
+        "Explain the difference between AI and ML.",
+        "How do I deploy a FastAPI app?",
+        "Tell me a fun fact!"
+    ]
+    for q in sample_queries:
+        if st.button(q, key=q):
+            create_new_chat()
+            st.session_state.active_chat_id = list(conversations.keys())[-1]
+            conversations[st.session_state.active_chat_id]["messages"].append({"role": "user", "content": q})
+            try:
+                res = requests.post("http://localhost:5002/query", json={"query": q})
+                answer = res.json().get("response", "No response from server.")
+            except Exception as e:
+                answer = f"Error: {e}"
+            conversations[st.session_state.active_chat_id]["messages"].append({"role": "assistant", "content": answer})
+            save_conversations()
+            st.rerun()
     st.stop()
 
 messages = conversations[chat_id]["messages"]
 
-# Display messages with small action icons
 for i, msg in enumerate(messages):
     col1, col2 = st.columns([12, 1])
     with col1:
         if msg["role"] == "user":
             if st.session_state.edit_index == i:
-                new_text = st.text_area("Edit your message:", value=msg["content"], key=f"edit_{i}")
-                if st.button("Resend", key=f"resend_{i}"):
+                new_text = st.text_area("Edit message:", value=msg["content"], key=f"edit_{i}")
+                if st.button("🔄 Resend", key=f"resend_{i}"):
                     messages[i]["content"] = new_text
-                    if i + 1 < len(messages) and messages[i + 1]["role"] == "assistant":
-                        del messages[i + 1]
+                    if i+1 < len(messages) and messages[i+1]["role"] == "assistant":
+                        del messages[i+1]
                     try:
                         res = requests.post("http://localhost:5002/query", json={"query": new_text})
                         answer = res.json().get("response", "No response from server.")
                     except Exception as e:
                         answer = f"Error: {e}"
-                    messages.insert(i + 1, {"role": "assistant", "content": answer})
+                    messages.insert(i+1, {"role": "assistant", "content": answer})
                     st.session_state.edit_index = None
                     save_conversations()
                     st.rerun()
@@ -140,28 +162,24 @@ for i, msg in enumerate(messages):
 
     with col2:
         if msg["role"] == "user":
-            if st.button("✏️", key=f"editbtn_{i}"):
+            if st.button("🖉", key=f"editbtn_{i}", help="Edit", use_container_width=True):
                 st.session_state.edit_index = i
                 st.rerun()
-        if st.button("🗑️", key=f"delbtn_{i}"):
+        if st.button("🗑️", key=f"delbtn_{i}", help="Delete", use_container_width=True):
             del messages[i]
             if st.session_state.edit_index == i:
                 st.session_state.edit_index = None
             save_conversations()
             st.rerun()
 
-# Input box (larger)
-prompt = st.chat_input("Ask something...")
-if prompt:
+# Input Box
+if prompt := st.chat_input("Ask something..."):
     messages.append({"role": "user", "content": prompt})
-    st.markdown(f'<div class="user-bubble">🧑‍💬 {prompt}</div>', unsafe_allow_html=True)
-
     try:
         res = requests.post("http://localhost:5002/query", json={"query": prompt})
         answer = res.json().get("response", "No response from server.")
     except Exception as e:
         answer = f"Error contacting server: {e}"
-
     messages.append({"role": "assistant", "content": answer})
-    st.markdown(f'<div class="assistant-bubble">🤖 {answer}</div>', unsafe_allow_html=True)
     save_conversations()
+    st.rerun()
